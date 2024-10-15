@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Health Data Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <link rel="stylesheet" href="static/css/styles.css">
+</head>
+<body>
+
+    <div id="loading-overlay" style="display: none;">
+        <div class="spinner">
+            <span>Loading data, please wait...</span>
+        </div>
+    </div>
+
+    <!-- Header Section -->
+    <div id="header">
+        <h1>Health Data Dashboard</h1>
+        <div id="user-controls">
+            Welcome, {{ username }} | <a href="{{ url_for('logout') }}" id="logout-button">Logout</a>
+        </div>
+    </div>
+
+<!-- Date Picker -->
+<label for="date-picker">Select Date Range:</label>
+<input type="text" id="date-picker" placeholder="Choose a date range" />
+
+<!-- Summary Cards -->
+<div id="summary-container">
+    <div class="summary-card">
+        <div class="summary-title">Avg Heart Rate (BPM)</div>
+        <div id="avg-bpm" class="summary-value">--</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-title">Avg SpO2 (%)</div>
+        <div id="avg-spo2" class="summary-value">--</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-title">Max Heart Rate (BPM)</div>
+        <div id="max-bpm" class="summary-value">--</div>
+    </div>
+    <div class="summary-card">
+        <div class="summary-title">Min SpO2 (%)</div>
+        <div id="min-spo2" class="summary-value">--</div>
+    </div>
+</div>
+
+<!-- Chart Container -->
+<div id="chart-container">
+    <canvas id="healthChart" width="400" height="200"></canvas>
+</div>
+
+<!-- Detailed Table View -->
+<div id="data-table-container">
+    <table>
+        <thead>
+            <tr>
+                <th>Timestamp</th>
+                <th>Heart Rate (BPM)</th>
+                <th>SpO2 (%)</th>
+            </tr>
+        </thead>
+        <tbody id="data-table-body">
+        </tbody>
+    </table>
+</div>
+
+<script>
+    let allData = [];
+    let chartInstance;
+
+    function showLoadingOverlay() {
+        document.getElementById('loading-overlay').style.display = 'flex';
+    }
+
+    function hideLoadingOverlay() {
+        document.getElementById('loading-overlay').style.display = 'none';
+    }
+
+    async function fetchHealthData() {
+        document.getElementById('loading-overlay').style.display = 'flex';
+
+        const response = await fetch('/get_all_health_data');
+        const data = await response.json();
+        document.getElementById('loading-overlay').style.display = 'none';
+
+        if (data.error) {
+            document.getElementById('data-table-body').innerHTML = `<tr><td colspan="3">${data.error}</td></tr>`;
+            return;
+        }
+
+        allData = data.data;
+        updateDashboard(allData);
+        initializeDatePicker();
+    }
+
+    function updateDashboard(data) {
+    // Sort data by timestamp
+    data.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    const filteredData = data.filter(entry => entry.bpm > 0 && entry.spo2 > 0);
+    const bpmValues = filteredData.map(entry => entry.bpm);
+    const spo2Values = filteredData.map(entry => entry.spo2);
+
+    // Summary Stats
+    const avgBpm = bpmValues.length > 0 ? (bpmValues.reduce((a, b) => a + b, 0) / bpmValues.length).toFixed(1) : '--';
+    const avgSpo2 = spo2Values.length > 0 ? (spo2Values.reduce((a, b) => a + b, 0) / spo2Values.length).toFixed(1) : '--';
+    const maxBpm = bpmValues.length > 0 ? Math.max(...bpmValues) : '--';
+    const minSpo2 = spo2Values.length > 0 ? Math.min(...spo2Values) : '--';
+
+    document.getElementById('avg-bpm').textContent = avgBpm;
+    document.getElementById('avg-spo2').textContent = avgSpo2;
+    document.getElementById('max-bpm').textContent = maxBpm;
+    document.getElementById('min-spo2').textContent = minSpo2;
+
+    renderChart(filteredData);
+    renderTable(filteredData);
+}
+
+    function renderChart(data) {
+    // Filter and map data
+    const filteredData = data.filter(entry => entry.bpm > 0 && entry.spo2 > 0);
+
+    const timestamps = filteredData.map(entry => new Date(entry.timestamp).toLocaleString('en-GB', {
+        day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit'
+    }));
+    const bpmData = filteredData.map(entry => parseFloat(entry.bpm.toFixed(1)));
+    const spo2Data = filteredData.map(entry => parseFloat(entry.spo2.toFixed(1)));
+
+    if (chartInstance) chartInstance.destroy();
+
+    const ctx = document.getElementById('healthChart').getContext('2d');
+    chartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: timestamps,
+            datasets: [
+                { label: 'Heart Rate (BPM)', data: bpmData, borderColor: 'rgba(255, 99, 132, 1)', fill: false },
+                { label: 'SpO2 (%)', data: spo2Data, borderColor: 'rgba(54, 162, 235, 1)', fill: false }
+            ]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true }
+            }
+        }
+    });
+}
+
+    function renderTable(data) {
+        const tableBody = document.getElementById('data-table-body');
+        tableBody.innerHTML = '';
+
+        data.forEach(entry => {
+            const date = new Date(entry.timestamp).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+            if (entry.bpm > 0 && entry.spo2 > 0) {
+                const row = `<tr><td>${date}</td><td>${entry.bpm}</td><td>${entry.spo2}</td></tr>`;
+                tableBody.innerHTML += row;
+            }
+        });
+    }
+
+    function initializeDatePicker() {
+    flatpickr("#date-picker", {
+        mode: "range",
+        dateFormat: "d M Y",
+        onChange: function(selectedDates) {
+            if (selectedDates.length > 0) {
+                const startDate = new Date(selectedDates[0]);
+                const start = startDate.setHours(0, 0, 0, 0); // Start of the day
+
+                let end;
+                if (selectedDates.length === 1) {
+                    // Only one date selected, set end to end of the same day
+                    const endDate = new Date(selectedDates[0]);
+                    end = endDate.setHours(23, 59, 59, 999); // End of the day
+                } else {
+                    // Range selected, set end to end of the last selected day
+                    const endDate = new Date(selectedDates[1]);
+                    end = endDate.setHours(23, 59, 59, 999); // End of the day
+                }
+
+                const filteredData = allData.filter(entry => {
+                    const timestamp = new Date(entry.timestamp).getTime();
+                    return timestamp >= start && timestamp <= end;
+                });
+                updateDashboard(filteredData);
+            } else {
+                // No dates selected, show all data
+                updateDashboard(allData);
+            }
+        }
+    });
+}
+
+    window.onload = fetchHealthData;
+</script>
+</body>
+</html>

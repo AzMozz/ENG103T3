@@ -3,29 +3,30 @@ from heartrate_monitor import HeartRateMonitor
 from time import sleep, time
 from datetime import datetime
 import dropbox
+import os
 
-# LEDs and button
-led_g = LED(15)  # Green LED
-led_r = LED(14)  # Red LED
-button = Button(18)  # Push Button
-
-# Heart Rate monitor instance
+# Initialize components
+led_g = LED(15)
+led_r = LED(14)
+button = Button(18)
 hrm = HeartRateMonitor(print_result=True)
 
-# File handler (initialized when sensor starts)
-file = None
+DROPBOX_APP_KEY = "	csjuutbmdc20u95"
+DROPBOX_APP_SECRET = "1t15sf6afrgb6rt"
+DROPBOX_ACCESS_TOKEN = "sl.B-1vol6pfXlwZt_xqmJprbYN77c8iVSNTMgyUKE5RwzLu7tz_RmBBipaqeHnupRoCXSTA9zjagSvmFlOMtWQeTwQ8wMWQz5g7VCnzk9khd82FQm3z2XX-Jx6hMmClfUdEbgClaf7qbKc"
+DROPBOX_REFRESH_TOKEN = "lVfESq_Qgh0AAAAAAAAAAWr7uWN09iHPKUdIC72kHB8OVV_1YiRCx9CiIehisUOZ"
 
-# Threshold values
+dbx = dropbox.Dropbox(
+    oauth2_access_token=DROPBOX_ACCESS_TOKEN,
+    oauth2_refresh_token=DROPBOX_REFRESH_TOKEN,
+    app_key=DROPBOX_APP_KEY,
+    app_secret=DROPBOX_APP_SECRET
+)
+
 SPO2_THRESHOLD = 90
 BPM_THRESHOLD = 100
+SENSOR_RUN_DURATION = 15
 
-# Duration for sensor to run (in seconds)
-SENSOR_RUN_DURATION = 15  # Change this to your desired duration
-
-DROPBOX_ACCESS_TOKEN = 'sl.B-eW308c2OG-fHjB8-U_8T3U-KBA_00avqN0N4dMDX7bFNcPDGxRpc9iZQNMS_vwOSUWQjGiAFgZXVOsQGgsZyyJQvZo4K4J8DGhZCt2nfayW9qIr0H-LUBatvvyffjGU8ehVIa2t0b7Mcmmm5t8'
-dbx = dropbox.Dropbox(DROPBOX_ACCESS_TOKEN)
-
-# Handle Blinking Red LED
 def blink_red_led(times=3, duration=0.5):
     for _ in range(times):
         led_r.on()
@@ -33,18 +34,14 @@ def blink_red_led(times=3, duration=0.5):
         led_r.off()
         sleep(duration)
 
-# Handle Stable Green LED
 def stable_green_led():
     led_r.off()
     led_g.on()
 
-# Check LED Status
 def check_and_blink():
     readings = hrm.get_latest_reading()
     bpm = readings['bpm']
     spo2 = readings['spo2']
-
-    # Blink red if SpO2 is below threshold or BPM is too high
     if spo2 < SPO2_THRESHOLD or bpm > BPM_THRESHOLD:
         led_g.off()
         blink_red_led(times=3, duration=0.5)
@@ -52,54 +49,60 @@ def check_and_blink():
         stable_green_led()
 
 def log_data_to_file(file, readings):
-    """Log sensor data to the file."""
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     bpm = readings['bpm']
     spo2 = readings['spo2']
-    # Write to file: Timestamp, BPM, SpO2
     file.write(f"{timestamp}, BPM: {bpm}, SpO2: {spo2}\n")
+    file.flush()
 
-def upload_to_dropbox():
-    with open('sensor_data.txt', 'rb') as f:
-        dbx.files_upload(f.read(), '/sensor_data.txt', mode=dropbox.files.WriteMode.overwrite)
+def upload_to_dropbox_and_cleanup(filename):
+    dropbox_folder_path = "/HealthData/"
+    try:
+        with open(filename, 'rb') as f:
+            dbx.files_upload(f.read(), dropbox_folder_path + filename, mode=dropbox.files.WriteMode.overwrite)
+        print(f"{filename} uploaded successfully.")
+        os.remove(filename)
+        print(f"{filename} deleted from local storage.")
+    except Exception as e:
+        print(f"Failed to upload {filename}: {e}")
 
 def start_sensor_and_record():
-    """Start the sensor and record data for a predetermined duration."""
     print("Starting sensor...")
     hrm.start_sensor()
-    file = open('sensor_data.txt', 'a')  # Open file in append mode
-    start_time = time()  # Record the start time
-    try:
-        while time() - start_time < SENSOR_RUN_DURATION:
-            try:
-                readings = hrm.get_latest_reading()  # Get sensor readings
-                check_and_blink()  # Handle LED based on readings
-                log_data_to_file(file, readings)  # Log readings to file
-                sleep(0.1)  # Check every second
-            except Exception as e:
-                print(f"Error while monitoring: {e}")
-    finally:
-        # Ensure the sensor is stopped and the file is closed
-        print('Stopping Sensor')
-        hrm.stop_sensor()
-        if file:
-            file.close()  # Close the file
-            print('Uploading data to Dropbox...')
-            upload_to_dropbox()  # Upload the file to Dropbox
-            # if uploaded successfully, print the success message
-            if dbx.files_get_metadata('/sensor_data.txt'):
-                print('Data uploaded successfully to Dropbox!')
-        led_g.off()  # Turn off the Green LED
-        led_r.off()  # Turn off the Red LED
+    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    filename = f"sensor_data_{timestamp}.txt"
+
+    with open(filename, 'w') as file:
+        start_time = time()
+        try:
+            while time() - start_time < SENSOR_RUN_DURATION:
+                readings = hrm.get_latest_reading()
+                check_and_blink()
+                log_data_to_file(file, readings)
+                sleep(0.1)
+        except Exception as e:
+            print(f"Error while monitoring: {e}")
+        finally:
+            file.flush()
+            print("Stopping Sensor")
+            hrm.stop_sensor()
+            print(f"Uploading {filename} to Dropbox...")
+            upload_to_dropbox_and_cleanup(filename)
+            led_g.off()
+            led_r.off()
+
 
 def main():
+    print("Waiting for button press...")
     is_sensor_running = False  # Local flag for sensor state
     file = None  # Local file handler
 
     try:
         while True:
             if button.is_pressed:
+                print("Button pressed, starting measurement...")
                 start_sensor_and_record()  # Start the sensor and record data
+                print("Measurement completed. Waiting for button press...")
             else:
                 sleep(0.1)  # Poll every 100ms for button press
     except KeyboardInterrupt:
